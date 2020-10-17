@@ -1,17 +1,19 @@
 # Check that buildx is enabled
-docker buildx version
+docker buildx version > /dev/null
 if [[ $? -ne 0 ]]; then
-echo "Docker must have experimental features enabled"
-exit 1
+    echo "Docker must have experimental features enabled"
+    exit 1
 fi
+ARCHITECTURE="--platform linux/arm/v7,linux/arm64/v8,linux/amd64"
 usage() { 
-    echo "Usage: $0 -t <DOCKER_TAG> -a <ARCHITECTURE> [-p Push]" 1>&2; exit 1; 
+    echo "Usage: $0 -t <DOCKER_TAG> [-a <ARCHITECTURE>] [-p Push] [-l Local build]"
+    echo "Default architecture: linux/arm/v7,linux/arm64/v8,linux/amd64"
+    exit 1 
 }
-ARCHITECTURE="linux/arm/v7,linux/arm64/v8,linux/amd64"
-while getopts ":a:t:pq" o; do
+while getopts ":a:t:pql" o; do
     case "${o}" in
         t)
-            TAG=${OPTARG}
+            TAG="${OPTARG}"
             ;;
         p)
             PUSH="--push"
@@ -20,7 +22,11 @@ while getopts ":a:t:pq" o; do
             QUIET="2> /dev/null"
             ;;
         a)
-            ARCHITECTURE=${OPTARG}
+            ARCHITECTURE="--platform ${OPTARG}"
+            ;;
+        l)
+            LOCAL="true"
+            ARCHITECTURE=""
             ;;
         :)  
             echo "ERROR: Option -$OPTARG requires an argument"
@@ -34,15 +40,27 @@ while getopts ":a:t:pq" o; do
 done
 shift $((OPTIND-1))
 
-# Setup qemu for multiplatform builds
-docker run --rm --privileged multiarch/qemu-user-static --reset -p yes
-# Create builder for docker
-BUILDER=$(docker buildx create --use)
+echo "${TAG}"
+if [[ -z "${TAG}" ]]; then
+    echo "Missing Tag!"
+    usage
+    exit 1
+fi
+
+if [[ -z "${LOCAL}" ]]; then
+  echo "Creating multi platform builder."
+  # Create builder for docker
+  BUILDER=$(docker buildx create --use)
+  # Setup qemu for multiplatform builds
+  docker run --rm --privileged multiarch/qemu-user-static --reset -p yes
+fi
 # Build container on all achitectures in parallel and push to Docker Hub
-eval "docker buildx build $PUSH -t $TAG --platform $ARCHITECTURE . $QUIET"
+eval "docker buildx build $PUSH -t $TAG $ARCHITECTURE . $QUIET"
 # Clean up and return error code for CI system if needed
 ERROR_CODE=$?
-docker buildx rm $BUILDER
+if [[ -z "${LOCAL}" ]]; then
+  docker buildx rm $BUILDER
+fi
 if [[ $ERROR_CODE -ne 0 ]]; then
  exit $ERROR_CODE
 fi
